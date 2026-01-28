@@ -1,155 +1,167 @@
 import json
 import numpy as np
-from collections import defaultdict
 
-def parse_json_document(filename):
-    with open(filename, 'r', encoding='utf-8') as f:
-        return f.read().strip()
 
-def compute_transitive_closure(adjacency):
-    size = adjacency.shape[0]
-    R = adjacency.astype(bool).copy()
-    
-    for pivot in range(size):
-        for src in range(size):
-            if R[src, pivot]:
-                for dst in range(size):
-                    R[src, dst] = R[src, dst] or R[pivot, dst]
-    return R.astype(int)
+def read_json(file_path: str) -> str:
+    with open(file_path, 'r') as json_file:
+        data = json_file.read()
+    return data
 
-def extract_equivalence_groups(relation):
-    n = relation.shape[0]
-    processed = [False] * n
-    groups = []
-    
-    for idx in range(n):
-        if not processed[idx]:
-            equivalent_set = set()
-            for other in range(n):
-                if relation[idx, other] and relation[other, idx]:
-                    equivalent_set.add(other)
-                    processed[other] = True
-            if equivalent_set:
-                groups.append(sorted([x+1 for x in equivalent_set]))
-    return groups
-
-def analyze_rankings(data1, data2):
-    rank1 = json.loads(data1)
-    rank2 = json.loads(data2)
-    
-    elements = set()
-    for ranking in (rank1, rank2):
-        for item in ranking:
-            elements.update(item if isinstance(item, list) else [item])
-    
-    if not elements:
-        return {"contradictions": [], "merged_ranking": []}
-    
-    max_elem = max(elements)
-    
-    def construct_precedence_matrix(ranking):
-        positions = np.zeros(max_elem, dtype=int)
-        level = 0
+def extract_all_objects(rankings: list[list[int, list[int]]]) -> set:
+    all_objects = set()
+    for ranking in rankings:
         for cluster in ranking:
-            items = cluster if isinstance(cluster, list) else [cluster]
-            for obj in items:
-                positions[obj-1] = level
-            level += 1
-        
-        mat = np.zeros((max_elem, max_elem), dtype=int)
-        for i in range(max_elem):
-            for j in range(max_elem):
-                mat[i, j] = 1 if positions[i] >= positions[j] else 0
-        return mat
+            if not isinstance(cluster, list):
+                cluster = [cluster]
+            all_objects.update(cluster)
+    return all_objects
+
+
+def find_contradiction_kernel(matrix_ab: np.ndarray, matrix_ab_prime: np.ndarray) -> list[list[int]]:
+    kernel = []
+    n = matrix_ab.shape[0]
     
-    M1 = construct_precedence_matrix(rank1)
-    M2 = construct_precedence_matrix(rank2)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
+                kernel.append([i + 1, j + 1])
+                
+    return kernel
+
+
+def build_precedence_matrix(ranking: list[int, list[int]], total_objects: int) -> np.ndarray:
+    positions = [0] * total_objects
+    current_position = 0
     
-    common_precedence = M1 * M2
-    M1_transposed = M1.T
-    M2_transposed = M2.T
+    for cluster in ranking:
+        if not isinstance(cluster, list):
+            cluster = [cluster]
+        for obj in cluster:
+            positions[obj - 1] = current_position
+        current_position += 1
     
-    divergence_pairs = []
-    for i in range(max_elem):
-        for j in range(i+1, max_elem):
-            if (common_precedence[i, j] == 0 and 
-                common_precedence[j, i] == 0 and
-                M1_transposed[i, j] * M2_transposed[i, j] == 0):
-                divergence_pairs.append([i+1, j+1])
+    matrix = np.zeros((total_objects, total_objects), dtype=int)
+    for i in range(total_objects):
+        for j in range(total_objects):
+            if positions[i] >= positions[j]:
+                matrix[i, j] = 1
+                
+    return matrix
+
+def warshall_algorithm(matrix: np.ndarray) -> np.ndarray:
+    n = len(matrix)
+    closure = matrix.copy()
     
-    conflict_matrix = M1 * M2_transposed | M1_transposed * M2
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                closure[i, j] = closure[i, j] or (closure[i, k] and closure[k, j])
     
-    base_relation = M1 * M2
+    return closure
+
+
+def find_connected_components(closure_matrix: np.ndarray) -> list[list[int]]:
+    n = len(closure_matrix)
+    visited = [False] * n
+    components = []
     
-    for a, b in divergence_pairs:
-        i, j = a-1, b-1
-        base_relation[i, j] = base_relation[j, i] = 1
+    for i in range(n):
+        if not visited[i]:
+            component = []
+            for j in range(n):
+                if closure_matrix[i, j] and closure_matrix[j, i]:
+                    component.append(j + 1)
+                    visited[j] = True
+            components.append(sorted(component))
     
-    symmetric_relation = base_relation * base_relation.T
+    return components
+
+
+def topological_sort_clusters(cluster_matrix: np.ndarray, num_clusters: int) -> list[int]:
+    visited = [False] * num_clusters
+    result_order = []
     
-    transitive_closure = compute_transitive_closure(symmetric_relation)
+    def dfs(v: int):
+        visited[v] = True
+        for u in range(num_clusters):
+            if cluster_matrix[v, u] == 1 and not visited[u]:
+                dfs(u)
+        result_order.append(v)
     
-    equivalence_classes = extract_equivalence_groups(transitive_closure)
+    for i in range(num_clusters):
+        if not visited[i]:
+            dfs(i)
     
-    if not equivalence_classes:
-        return {"contradictions": divergence_pairs, "merged_ranking": []}
+    result_order.reverse()
+    return result_order
+
+
+def main(json_string_a: str, json_string_b: str) -> str:
+    ranking_a = json.loads(json_string_a)
+    ranking_b = json.loads(json_string_b)
     
-    class_count = len(equivalence_classes)
-    ordering_matrix = np.zeros((class_count, class_count), dtype=int)
+    all_objects = extract_all_objects([ranking_a, ranking_b])
     
-    for idx1 in range(class_count):
-        for idx2 in range(class_count):
-            if idx1 != idx2:
-                elem1 = equivalence_classes[idx1][0] - 1
-                elem2 = equivalence_classes[idx2][0] - 1
-                if base_relation[elem1, elem2]:
-                    ordering_matrix[idx1, idx2] = 1
+    if not all_objects:
+        return json.dumps({"kernel": [], "consistent_ranking": []})
     
-    visited = [False] * class_count
-    sorted_indices = []
+    total_objects = max(all_objects)
     
-    def dfs(node):
-        visited[node] = True
-        for neighbor in range(class_count):
-            if ordering_matrix[node, neighbor] and not visited[neighbor]:
-                dfs(neighbor)
-        sorted_indices.append(node)
+    matrix_a = build_precedence_matrix(ranking_a, total_objects)
+    matrix_b = build_precedence_matrix(ranking_b, total_objects)
     
-    for node in range(class_count):
-        if not visited[node]:
-            dfs(node)
+    matrix_ab = matrix_a * matrix_b
+    matrix_ab_prime = matrix_a.T * matrix_b.T
     
-    sorted_indices.reverse()
+    kernel = []
+    for i in range(total_objects):
+        for j in range(i + 1, total_objects):
+            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
+                kernel.append([i + 1, j + 1])
+
+    P1 = matrix_a * matrix_b.T
+    P2 = matrix_a.T * matrix_b
+    P = np.logical_or(P1, P2).astype(int)
     
-    final_ranking = []
-    for class_idx in sorted_indices:
-        group = equivalence_classes[class_idx]
-        final_ranking.append(group[0] if len(group) == 1 else group)
+    C = matrix_a * matrix_b
     
-    return {
-        "contradictions": divergence_pairs,
-        "merged_ranking": final_ranking
+    for pair in kernel:
+        i, j = pair[0] - 1, pair[1] - 1
+        C[i, j] = 1
+        C[j, i] = 1
+    
+    E = C * C.T
+    
+    E_star = warshall_algorithm(E)
+    
+    clusters = find_connected_components(E_star)
+    
+    num_clusters = len(clusters)
+    cluster_matrix = np.zeros((num_clusters, num_clusters), dtype=int)
+    
+    for i in range(num_clusters):
+        for j in range(num_clusters):
+            if i != j:
+                elem_i = clusters[i][0] - 1
+                elem_j = clusters[j][0] - 1
+                if C[elem_i, elem_j] == 1:
+                    cluster_matrix[i, j] = 1
+    
+    cluster_order = topological_sort_clusters(cluster_matrix, num_clusters)
+    
+    consistent_ranking = []
+    for idx in cluster_order:
+        cluster = clusters[idx]
+        if len(cluster) == 1:
+            consistent_ranking.append(cluster[0])
+        else:
+            consistent_ranking.append(cluster)
+    
+    result = {
+        "kernel": kernel,
+        "consistent_ranking": consistent_ranking
     }
+    
+    return json.dumps(result, ensure_ascii=False)
 
-def execute_comparison():
-    input_files = ['range_a.json', 'range_b.json', 'range_c.json']
-    results = {}
-    
-    for i in range(len(input_files)):
-        for j in range(i+1, len(input_files)):
-            data1 = parse_json_document(input_files[i])
-            data2 = parse_json_document(input_files[j])
-            key = f"{input_files[i][:-5]}_{input_files[j][:-5]}"
-            results[key] = analyze_rankings(data1, data2)
-    
-    return results
 
-if __name__ == "__main__":
-    comparisons = execute_comparison()
-    
-    print("РАНЖИРОВКИ - АНАЛИЗ СРАВНЕНИЯ")
-    
-    for comp_name, result in comparisons.items():
-        print(f"\n{comp_name.replace('_', ' vs ')}")
-        print(f"Противоречивые пары: {result['contradictions']}")
-        print(f"Результирующий порядок: {result['merged_ranking']}")
