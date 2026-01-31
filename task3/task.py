@@ -7,29 +7,11 @@ def read_json(file_path: str) -> str:
         data = json_file.read()
     return data
 
-def extract_all_objects(rankings: list[list[int, list[int]]]) -> set:
-    all_objects = set()
-    for ranking in rankings:
-        for cluster in ranking:
-            if not isinstance(cluster, list):
-                cluster = [cluster]
-            all_objects.update(cluster)
-    return all_objects
-
-
-def find_contradiction_kernel(matrix_ab: np.ndarray, matrix_ab_prime: np.ndarray) -> list[list[int]]:
-    kernel = []
-    n = matrix_ab.shape[0]
-    
-    for i in range(n):
-        for j in range(i + 1, n):
-            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
-                kernel.append([i + 1, j + 1])
-                
-    return kernel
-
 
 def build_precedence_matrix(ranking: list[int, list[int]], total_objects: int) -> np.ndarray:
+    """
+    Формирование матрицы предшествования на основе ранжировки
+    """
     positions = [0] * total_objects
     current_position = 0
     
@@ -48,7 +30,37 @@ def build_precedence_matrix(ranking: list[int, list[int]], total_objects: int) -
                 
     return matrix
 
+
+def extract_all_objects(rankings: list[list[int, list[int]]]) -> set:
+    """Извлекает все уникальные объекты из списка ранжировок."""
+    all_objects = set()
+    for ranking in rankings:
+        for cluster in ranking:
+            if not isinstance(cluster, list):
+                cluster = [cluster]
+            all_objects.update(cluster)
+    return all_objects
+
+
+def find_contradiction_kernel(matrix_ab: np.ndarray, matrix_ab_prime: np.ndarray) -> list[list[int]]:
+    """
+    Ядро противоречий между двумя матрицами
+    """
+    kernel = []
+    n = matrix_ab.shape[0]
+    
+    for i in range(n):
+        for j in range(i + 1, n):
+            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
+                kernel.append([i + 1, j + 1])
+                
+    return kernel
+
+
 def warshall_algorithm(matrix: np.ndarray) -> np.ndarray:
+    """
+    Алгоритм Уоршелла для нахождения транзитивного замыкания
+    """
     n = len(matrix)
     closure = matrix.copy()
     
@@ -61,6 +73,9 @@ def warshall_algorithm(matrix: np.ndarray) -> np.ndarray:
 
 
 def find_connected_components(closure_matrix: np.ndarray) -> list[list[int]]:
+    """
+    Находит компоненты сильной связности в графе
+    """
     n = len(closure_matrix)
     visited = [False] * n
     components = []
@@ -78,6 +93,9 @@ def find_connected_components(closure_matrix: np.ndarray) -> list[list[int]]:
 
 
 def topological_sort_clusters(cluster_matrix: np.ndarray, num_clusters: int) -> list[int]:
+    """
+    Топологическая сортировка кластеров
+    """
     visited = [False] * num_clusters
     result_order = []
     
@@ -97,6 +115,9 @@ def topological_sort_clusters(cluster_matrix: np.ndarray, num_clusters: int) -> 
 
 
 def main(json_string_a: str, json_string_b: str) -> str:
+    """
+    Возвращает JSON-строку с ядром противоречий и согласованной ранжировкой
+    """
     ranking_a = json.loads(json_string_a)
     ranking_b = json.loads(json_string_b)
     
@@ -165,3 +186,24 @@ def main(json_string_a: str, json_string_b: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+
+if __name__ == "__main__":
+    json_string_a: str = read_json("task3/ranking-A.json")
+    json_string_b: str = read_json("task3/ranking-B.json")
+    json_string_c: str = read_json("task3/ranking-C.json")
+    
+    # AB
+    result_ab = json.loads(main(json_string_a, json_string_b))
+    print(f"AB:\nЯдро противоречий: {result_ab['kernel']}\nСогласованная кластерная ранжировка: {result_ab['consistent_ranking']}")
+    
+    # AC
+    result_ac = json.loads(main(json_string_a, json_string_c))
+    print(f"AC:\nЯдро противоречий: {result_ac['kernel']}\nСогласованная кластерная ранжировка: {result_ac['consistent_ranking']}")
+
+    # BC
+    result_bc = json.loads(main(json_string_b, json_string_c))
+    print(f"BC:\nЯдро противоречий: {result_bc['kernel']}\nСогласованная кластерная ранжировка: {result_bc['consistent_ranking']}")
+
+    #ground_truth: str = read_json("task3/AB-contradiction-kernel.json")
+    #answer: str = main(json_string_a, json_string_b)
+    #assert answer == ground_truth, "Тест не выполнен! Значения не совпали :("

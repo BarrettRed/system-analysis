@@ -7,15 +7,6 @@ def read_json(file_path: str) -> str:
     return data
 
 
-
-def load_input_data(temperature_json: str, heat_lvl_json: str, mapping_json: str):
-    temperature_terms = parse_json_string(temperature_json)
-    heat_lvl_terms = parse_json_string(heat_lvl_json)
-    mapping = json.loads(mapping_json)
-    
-    return temperature_terms, heat_lvl_terms, mapping
-
-
 def parse_json_string(json_string: str) -> dict:
     data = json.loads(json_string)
     data = data['температура']
@@ -81,6 +72,15 @@ def generate_discrete_values(s_min, s_max, num_points=1000):
     ]
 
 
+def load_input_data(temperature_json: str, heat_lvl_json: str, mapping_json: str):
+    """Загрузка и парсинг всех входных данных"""
+    temperature_terms = parse_json_string(temperature_json)
+    heat_lvl_terms = parse_json_string(heat_lvl_json)
+    mapping = json.loads(mapping_json)
+    
+    return temperature_terms, heat_lvl_terms, mapping
+
+
 def apply_fuzzy_rules(temperature_terms, heat_lvl_terms, mapping, current_temp, s_values):
     aggregated_membership = [0.0] * len(s_values)
     
@@ -126,3 +126,14 @@ def main(temperature_json: str, heat_lvl_json: str, mapping_json: str, current_t
     
     return control_value
 
+
+
+if __name__ == "__main__":
+    temperature_json: str = read_json("task4/temperature.json")
+    heat_lvl_json: str = read_json("task4/heat_lvl.json")
+    mapping_json: str = read_json("task4/mapping.json")
+
+    current_temperature = 23.0
+    control_value: float  = main(temperature_json, heat_lvl_json, mapping_json, current_temperature)
+
+    print(f"Значение оптимального управления = {control_value} для температуры: {current_temperature}")
