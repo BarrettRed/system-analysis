@@ -2,129 +2,126 @@ import json
 
 
 def read_json(file_path: str) -> str:
-    with open(file_path, 'r', encoding='utf-8') as json_file:
-        data = json_file.read()
-    return data
+    buffer = []
+    with open(file_path, 'r', encoding='utf-8') as fh:
+        while chunk := fh.read(4096):
+            buffer.append(chunk)
+    return ''.join(buffer)
 
 
 def parse_json_string(json_string: str) -> dict:
-    data = json.loads(json_string)
-    data = data['температура']
+    payload = json.loads(json_string)
+    records = payload.get('температура', [])
     
-    values = dict()
-    for value in data:
-        id = value["id"]
-        points = value["points"]
-        values[id] = points
+    result = {}
+    for entry in records:
+        key = entry["id"]
+        coords = entry["points"]
+        result[key] = coords
     
-    return values
+    return result
 
 
 def linear_interpolation(xa, ya, xb, yb, x_val) -> float:
-    if xa == xb:
+    dx = xb - xa
+    if abs(dx) < 1e-9:
         return ya
-    return ya + (yb - ya) * (x_val - xa) / (xb - xa)
+    t = (x_val - xa) / dx
+    return ya + (yb - ya) * t
 
 
 def calculate_trapezoidal_membership(terms, term, x) -> float:
     if term not in terms:
         return 0.0
     
-    (x1, y1), (x2, y2), (x3, y3), (x4, y4) = terms[term]
+    pts = terms[term]
+    (a, ha), (b, hb), (c, hc), (d, hd) = pts
     
-    if x <= x1:
-        return y1
+    if x < a:
+        return ha if x <= a else 0.0
     
-    elif x >= x4:
-        return y4
+    if x > d:
+        return hd if x >= d else 0.0
     
-    elif x <= x1:
-        return y1
+    if a <= x <= b:
+        if abs(b - a) < 1e-9:
+            return max(ha, hb)
+        return linear_interpolation(a, ha, b, hb, x)
     
-    elif x >= x4:
-        return y4
+    if b <= x <= c:
+        return max(hb, hc)
     
-    elif x1 <= x <= x2:
-        return linear_interpolation(x1, y1, x2, y2, x)
+    if c <= x <= d:
+        if abs(d - c) < 1e-9:
+            return max(hc, hd)
+        return linear_interpolation(c, hc, d, hd, x)
     
-    elif x2 <= x <= x3:
-        return linear_interpolation(x2, y2, x3, y3, x)
-    
-    elif x3 <= x <= x4:
-        return linear_interpolation(x3, y3, x4, y4, x)
-    
-    else:
-        return 0.0
+    return 0.0
 
 
 def create_output_range(terms_dict):
-    all_points = []
-    for points in terms_dict.values():
-        for x, _ in points:
-            all_points.append(x)
-    return min(all_points), max(all_points)
+    extremes = []
+    for _, shape in terms_dict.items():
+        for coord, _ in shape:
+            extremes.append(coord)
+    return (min(extremes), max(extremes)) if extremes else (0, 1)
 
 
 def generate_discrete_values(s_min, s_max, num_points=1000):
-    return [
-        s_min + i * (s_max - s_min) / (num_points - 1)
-        for i in range(num_points)
-    ]
+    step = (s_max - s_min) / (num_points - 1) if num_points > 1 else 0
+    return [s_min + idx * step for idx in range(num_points)]
 
 
 def load_input_data(temperature_json: str, heat_lvl_json: str, mapping_json: str):
-    """Загрузка и парсинг всех входных данных"""
-    temperature_terms = parse_json_string(temperature_json)
-    heat_lvl_terms = parse_json_string(heat_lvl_json)
-    mapping = json.loads(mapping_json)
+    temp_data = parse_json_string(temperature_json)
+    heat_data = parse_json_string(heat_lvl_json)
+    rules = json.loads(mapping_json)
     
-    return temperature_terms, heat_lvl_terms, mapping
+    return temp_data, heat_data, rules
 
 
 def apply_fuzzy_rules(temperature_terms, heat_lvl_terms, mapping, current_temp, s_values):
-    aggregated_membership = [0.0] * len(s_values)
+    n = len(s_values)
+    accumulator = [0.0 for _ in range(n)]
     
-    for rule in mapping:
-        temp_term, heat_term = rule[0], rule[1]
-        activation = calculate_trapezoidal_membership(temperature_terms, temp_term, current_temp)
+    for condition, consequence in mapping:
+        firing_strength = calculate_trapezoidal_membership(temperature_terms, condition, current_temp)
         
-        if activation > 0:
-            for i, s in enumerate(s_values):
-                mu_heat_lvl = calculate_trapezoidal_membership(heat_lvl_terms, heat_term, s)
-                aggregated_membership[i] = max(
-                    aggregated_membership[i], 
-                    min(activation, mu_heat_lvl)
-                )
+        if firing_strength <= 0:
+            continue
+            
+        for idx, s_coord in enumerate(s_values):
+            degree = calculate_trapezoidal_membership(heat_lvl_terms, consequence, s_coord)
+            clipped = firing_strength if firing_strength < degree else degree
+            if clipped > accumulator[idx]:
+                accumulator[idx] = clipped
     
-    return aggregated_membership
+    return accumulator
 
 
 def defuzzify(aggregated_membership, s_values, s_min, s_max):
-    peak_membership = max(aggregated_membership)
+    top_val = max(aggregated_membership) if aggregated_membership else 0.0
     
-    if peak_membership == 0:
-        return (s_min + s_max) / 2
+    if top_val == 0:
+        return (s_min + s_max) * 0.5
     
-    for i, mu in enumerate(aggregated_membership):
-        if mu == peak_membership:
-            return s_values[i]
-    
-    return s_values[0]
+    candidates = [s_values[i] for i, val in enumerate(aggregated_membership) if val == top_val]
+    return candidates[len(candidates) // 2] if candidates else s_values[0]
 
 
 def main(temperature_json: str, heat_lvl_json: str, mapping_json: str, current_temp: float) -> float:
-    temperature_terms = parse_json_string(temperature_json)
-    heat_lvl_terms = parse_json_string(heat_lvl_json)
-    mapping = json.loads(mapping_json)
+    input_vars = parse_json_string(temperature_json)
+    output_vars = parse_json_string(heat_lvl_json)
+    rule_base = json.loads(mapping_json)
     
-    s_min, s_max = create_output_range(heat_lvl_terms)
-    s_values = generate_discrete_values(s_min, s_max)
+    lower, upper = create_output_range(output_vars)
+    universe = generate_discrete_values(lower, upper)
     
-    aggregated_membership = apply_fuzzy_rules(temperature_terms, heat_lvl_terms, mapping, current_temp, s_values)
+    fuzzy_output = apply_fuzzy_rules(input_vars, output_vars, rule_base, current_temp, universe)
     
-    control_value = defuzzify(aggregated_membership, s_values, s_min, s_max)
+    crisp_value = defuzzify(fuzzy_output, universe, lower, upper)
     
-    return control_value
+    return crisp_value
 
 
 
@@ -134,6 +131,6 @@ if __name__ == "__main__":
     mapping_json: str = read_json("task4/mapping.json")
 
     current_temperature = 23.0
-    control_value: float  = main(temperature_json, heat_lvl_json, mapping_json, current_temperature)
+    control_value: float = main(temperature_json, heat_lvl_json, mapping_json, current_temperature)
 
     print(f"Значение оптимального управления = {control_value} для температуры: {current_temperature}")

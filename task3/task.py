@@ -3,187 +3,164 @@ import numpy as np
 
 
 def read_json(file_path: str) -> str:
-    with open(file_path, 'r') as json_file:
-        data = json_file.read()
-    return data
+    content = []
+    with open(file_path, 'r') as fh:
+        for segment in fh:
+            content.append(segment)
+    return ''.join(content)
 
 
 def build_precedence_matrix(ranking: list[int, list[int]], total_objects: int) -> np.ndarray:
-    """
-    Формирование матрицы предшествования на основе ранжировки
-    """
-    positions = [0] * total_objects
-    current_position = 0
+    idx_mapping = {}
+    lvl = 0
     
-    for cluster in ranking:
-        if not isinstance(cluster, list):
-            cluster = [cluster]
-        for obj in cluster:
-            positions[obj - 1] = current_position
-        current_position += 1
+    for group in ranking:
+        items = group if isinstance(group, (list, tuple)) else [group]
+        for item in items:
+            idx_mapping[item - 1] = lvl
+        lvl += 1
     
-    matrix = np.zeros((total_objects, total_objects), dtype=int)
-    for i in range(total_objects):
-        for j in range(total_objects):
-            if positions[i] >= positions[j]:
-                matrix[i, j] = 1
-                
-    return matrix
+    col_indices = np.arange(total_objects)
+    row_levels = np.array([idx_mapping.get(i, 0) for i in range(total_objects)])
+    
+    precedence = (row_levels[:, None] >= row_levels[None, :]).astype(int)
+    return precedence
 
 
 def extract_all_objects(rankings: list[list[int, list[int]]]) -> set:
-    """Извлекает все уникальные объекты из списка ранжировок."""
-    all_objects = set()
-    for ranking in rankings:
-        for cluster in ranking:
-            if not isinstance(cluster, list):
-                cluster = [cluster]
-            all_objects.update(cluster)
-    return all_objects
+    collected = set()
+    for rnk in rankings:
+        for entry in rnk:
+            elements = entry if hasattr(entry, '__iter__') and not isinstance(entry, (str, bytes)) else [entry]
+            collected.update(elements)
+    return collected
 
 
 def find_contradiction_kernel(matrix_ab: np.ndarray, matrix_ab_prime: np.ndarray) -> list[list[int]]:
-    """
-    Ядро противоречий между двумя матрицами
-    """
-    kernel = []
-    n = matrix_ab.shape[0]
+    discrepancies = []
+    dim = matrix_ab.shape[0]
     
-    for i in range(n):
-        for j in range(i + 1, n):
-            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
-                kernel.append([i + 1, j + 1])
+    mask = (matrix_ab == 0) & (matrix_ab_prime == 0)
+    for i in range(dim):
+        for j in range(i + 1, dim):
+            if mask[i, j]:
+                discrepancies.append([i + 1, j + 1])
                 
-    return kernel
+    return discrepancies
 
 
 def warshall_algorithm(matrix: np.ndarray) -> np.ndarray:
-    """
-    Алгоритм Уоршелла для нахождения транзитивного замыкания
-    """
-    n = len(matrix)
-    closure = matrix.copy()
+    n_dim = matrix.shape[0]
+    transitive = matrix.astype(bool).copy()
     
-    for k in range(n):
-        for i in range(n):
-            for j in range(n):
-                closure[i, j] = closure[i, j] or (closure[i, k] and closure[k, j])
+    for intermediate in range(n_dim):
+        transitive |= transitive[:, intermediate][:, None] & transitive[intermediate, :]
     
-    return closure
+    return transitive.astype(int)
 
 
 def find_connected_components(closure_matrix: np.ndarray) -> list[list[int]]:
-    """
-    Находит компоненты сильной связности в графе
-    """
-    n = len(closure_matrix)
-    visited = [False] * n
-    components = []
+    size = closure_matrix.shape[0]
+    marked = [False] * size
+    groups = []
     
-    for i in range(n):
-        if not visited[i]:
-            component = []
-            for j in range(n):
-                if closure_matrix[i, j] and closure_matrix[j, i]:
-                    component.append(j + 1)
-                    visited[j] = True
-            components.append(sorted(component))
+    closure_bool = closure_matrix.astype(bool)
     
-    return components
+    for start in range(size):
+        if marked[start]:
+            continue
+        component = []
+        for vertex in range(size):
+            if closure_bool[start, vertex] and closure_bool[vertex, start]:
+                component.append(vertex + 1)
+                marked[vertex] = True
+        if component:
+            groups.append(sorted(component))
+    
+    return groups
 
 
 def topological_sort_clusters(cluster_matrix: np.ndarray, num_clusters: int) -> list[int]:
-    """
-    Топологическая сортировка кластеров
-    """
-    visited = [False] * num_clusters
-    result_order = []
+    seen = [False] * num_clusters
+    stack = []
     
-    def dfs(v: int):
-        visited[v] = True
-        for u in range(num_clusters):
-            if cluster_matrix[v, u] == 1 and not visited[u]:
-                dfs(u)
-        result_order.append(v)
+    def explore(node: int):
+        seen[node] = True
+        neighbors = np.where(cluster_matrix[node] == 1)[0]
+        for nb in neighbors:
+            if not seen[nb]:
+                explore(nb)
+        stack.append(node)
     
-    for i in range(num_clusters):
-        if not visited[i]:
-            dfs(i)
+    for v in range(num_clusters):
+        if not seen[v]:
+            explore(v)
     
-    result_order.reverse()
-    return result_order
+    return stack[::-1]
 
 
 def main(json_string_a: str, json_string_b: str) -> str:
-    """
-    Возвращает JSON-строку с ядром противоречий и согласованной ранжировкой
-    """
-    ranking_a = json.loads(json_string_a)
-    ranking_b = json.loads(json_string_b)
+    data_a = json.loads(json_string_a)
+    data_b = json.loads(json_string_b)
     
-    all_objects = extract_all_objects([ranking_a, ranking_b])
+    universe = extract_all_objects([data_a, data_b])
     
-    if not all_objects:
+    if not universe:
         return json.dumps({"kernel": [], "consistent_ranking": []})
     
-    total_objects = max(all_objects)
+    max_obj = max(universe)
     
-    matrix_a = build_precedence_matrix(ranking_a, total_objects)
-    matrix_b = build_precedence_matrix(ranking_b, total_objects)
+    mat_a = build_precedence_matrix(data_a, max_obj)
+    mat_b = build_precedence_matrix(data_b, max_obj)
     
-    matrix_ab = matrix_a * matrix_b
-    matrix_ab_prime = matrix_a.T * matrix_b.T
+    intersection_ab = mat_a * mat_b
+    intersection_ab_t = mat_a.T * mat_b.T
     
-    kernel = []
-    for i in range(total_objects):
-        for j in range(i + 1, total_objects):
-            if matrix_ab[i, j] == 0 and matrix_ab_prime[i, j] == 0:
-                kernel.append([i + 1, j + 1])
+    conflict_kernel = []
+    for x in range(max_obj):
+        for y in range(x + 1, max_obj):
+            if not intersection_ab[x, y] and not intersection_ab_t[x, y]:
+                conflict_kernel.append([x + 1, y + 1])
 
-    P1 = matrix_a * matrix_b.T
-    P2 = matrix_a.T * matrix_b
-    P = np.logical_or(P1, P2).astype(int)
+    partial_1 = mat_a * mat_b.T
+    partial_2 = mat_a.T * mat_b
+    aggregation = np.logical_or(partial_1, partial_2).astype(int)
     
-    C = matrix_a * matrix_b
+    combined = mat_a * mat_b
     
-    for pair in kernel:
-        i, j = pair[0] - 1, pair[1] - 1
-        C[i, j] = 1
-        C[j, i] = 1
+    for pair in conflict_kernel:
+        u, v = pair[0] - 1, pair[1] - 1
+        combined[u, v] = combined[v, u] = 1
     
-    E = C * C.T
+    equivalence = combined * combined.T
     
-    E_star = warshall_algorithm(E)
+    star_closure = warshall_algorithm(equivalence)
     
-    clusters = find_connected_components(E_star)
+    components = find_connected_components(star_closure)
     
-    num_clusters = len(clusters)
-    cluster_matrix = np.zeros((num_clusters, num_clusters), dtype=int)
+    cluster_cnt = len(components)
+    adjacency = np.zeros((cluster_cnt, cluster_cnt), dtype=int)
     
-    for i in range(num_clusters):
-        for j in range(num_clusters):
-            if i != j:
-                elem_i = clusters[i][0] - 1
-                elem_j = clusters[j][0] - 1
-                if C[elem_i, elem_j] == 1:
-                    cluster_matrix[i, j] = 1
+    for p in range(cluster_cnt):
+        for q in range(cluster_cnt):
+            if p != q:
+                repr_p = components[p][0] - 1
+                repr_q = components[q][0] - 1
+                adjacency[p, q] = int(combined[repr_p, repr_q] == 1)
     
-    cluster_order = topological_sort_clusters(cluster_matrix, num_clusters)
+    ordering = topological_sort_clusters(adjacency, cluster_cnt)
     
-    consistent_ranking = []
-    for idx in cluster_order:
-        cluster = clusters[idx]
-        if len(cluster) == 1:
-            consistent_ranking.append(cluster[0])
-        else:
-            consistent_ranking.append(cluster)
+    final_ranking = []
+    for pos in ordering:
+        group = components[pos]
+        final_ranking.append(group[0] if len(group) == 1 else group)
     
-    result = {
-        "kernel": kernel,
-        "consistent_ranking": consistent_ranking
+    output = {
+        "kernel": conflict_kernel,
+        "consistent_ranking": final_ranking
     }
     
-    return json.dumps(result, ensure_ascii=False)
+    return json.dumps(output, ensure_ascii=False)
 
 
 
@@ -192,18 +169,11 @@ if __name__ == "__main__":
     json_string_b: str = read_json("task3/ranking-B.json")
     json_string_c: str = read_json("task3/ranking-C.json")
     
-    # AB
     result_ab = json.loads(main(json_string_a, json_string_b))
     print(f"AB:\nЯдро противоречий: {result_ab['kernel']}\nСогласованная кластерная ранжировка: {result_ab['consistent_ranking']}")
     
-    # AC
     result_ac = json.loads(main(json_string_a, json_string_c))
     print(f"AC:\nЯдро противоречий: {result_ac['kernel']}\nСогласованная кластерная ранжировка: {result_ac['consistent_ranking']}")
 
-    # BC
     result_bc = json.loads(main(json_string_b, json_string_c))
     print(f"BC:\nЯдро противоречий: {result_bc['kernel']}\nСогласованная кластерная ранжировка: {result_bc['consistent_ranking']}")
-
-    #ground_truth: str = read_json("task3/AB-contradiction-kernel.json")
-    #answer: str = main(json_string_a, json_string_b)
-    #assert answer == ground_truth, "Тест не выполнен! Значения не совпали :("
